@@ -4,7 +4,17 @@ Scripts and data files related to Linscheid 2019 paper
 ## Run the analysis
 
 1. Download the raw data fastq files from the [Gene Expression Omnibus](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE130710) 
-2. Run [10x Genomics Cell Ranger (v3.0)](https://support.10xgenomics.com/single-cell-gene-expression/software/pipelines/latest/what-is-cell-ranger) on the fastq files
+2. Run [10x Genomics Cell Ranger (v3.0)](https://support.10xgenomics.com/single-cell-gene-expression/software/pipelines/latest/what-is-cell-ranger) `count` on the fastq files as follows
+
+```
+# Align sample H4_S1
+cellranger count --id=H4_S1-5000_cells \
+                 --fastqs=<fastqfile_path> \
+                 --sample="H4_S1" \
+                 --transcriptome=<ref_transcriptomes>/mm10-1.2.0_premrna \ # need to download mus musculus pre-mrna transcriptome to map reads
+                 --expect-cells=5000 > <output_dir>/count_out.H4_S1.txt
+```
+
 3. Edit `run_seurat_analysis.sh`
     * replace the value of dirs_project_10x argument by the Cell Ranger sample output folders which contain subdir `outs/raw_feature_bc_matrix` with files `matrix.mtx.gz`, `features.tsv.gz`, and `barcodes.tsv.gz` files
     * replace `dir_out` argument value by desired output directory
