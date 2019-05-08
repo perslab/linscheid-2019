@@ -1,7 +1,6 @@
-# Seurat pipeline
-# Usage: 
-
-# time Rscript /projects/jonatan/tools/seurat-src/seurat_pipeline.R --dirs_project_10x 'c("/nfsdata/data/sc-10x/data-runs/180511-perslab-immunometab/247L-5000_cells/","/nfsdata/data/sc-10x/data-runs/180511-perslab-immunometab/249L-5000_cells/","/nfsdata/data/sc-10x/data-runs/180511-perslab-immunometab/255L-5000_cells/","/nfsdata/data/sc-10x/data-runs/180511-perslab-immunometab/260L-5000_cells/")' --dir_out /projects/jonatan/tmp-liver/ --flag_datatype sc --flag_organism hsapiens --prefix_data liver  --prefix_run seurat_3_align  --use_filtered_feature_bc_matrix F --nCount_RNA_min 500  --nCount_RNA_max 15000 --nFeature_RNA_min 100 --nFeature_RNA_max 10000 --percent.mito_max Inf --percent.ribo_max Inf --rm_sc_multiplets T --n_comp 75 --align_group_IDs "c('all')" --feats_to_plot "c('percent.mito','percent.ribo','nCount_RNA','nFeature_RNA','MALAT1')"
+#' @title Seurat pipeline
+#' @author Jonatan Thompson, Pers lab, rkm916 at ku dot dk 
+#' @examples need to define $dir_10x_H4_S1, $dir_10x_H5_S2, $RAM_Gb_max. Then cd to linscheid-2019 and run Rscript ./src/seurat_analysis.R --dirs_project_10x 'c($dir_10x_H4_S1,$dir_10x_H5_S2)' --dir_out . --flag_datatype sc --flag_organism mmusculus --prefix_data 190301-lundby-coronarysinus  --prefix_run 1  --n_cells_loaded 9000 --use_filtered_feature_bc_matrix F --nCount_RNA_min 3000  --nCount_RNA_max 50000 --run_SoupX F --nFeature_RNA_min 0 --nFeature_RNA_max 25000 --percent.mito_max 0.08 --percent.ribo_max 0.01 --rm_sc_multiplets T --vars.to.regress "c('percent.mito','percent.ribo','nCount_RNA')" --merge_group_IDs "c('all')" --n_PC 75 --use_jackstraw F --res_primary 0.8 --feats_to_plot "c('percent.mito','percent.ribo','nCount_RNA','nFeature_RNA')" --RAM_Gb_max $RAM_Gb_max
 
 ######################################################################
 ########################### OptParse #################################
@@ -64,7 +63,7 @@ option_list <- list(
               help = "align samples by individual sample identifiers? Succeeds any sample merge. Similar to align_group_IDs, but specifying samples in each group by matching strings. Takes a list of vectors of sample identifiers, named by desired group identifier. The whole list should be in quotes (single if using double inside, and vice versa). E.g. ''list(colon=c('1_GF', '2_CR'), ileum=c('3_GF', '4_CR'))'', [default %default]"), 
   make_option("--nAnchorFeatures", type="integer", default = 2000,
               help = "How many features (e.g. genes) to use when integrating/aligning datasets [default %default]"), 
-  make_option("--n_PC", type="integer", default = 50L,
+  make_option("--n_PC", type="integer", default = 30L,
               help = "How many principal components? [default %default]"),
   make_option("--use_jackstraw", type="logical", default = TRUE,
               help = "Use Jackstraw resampling to select subset of PCs with significant gene loadings? May improve results but slow [default %default]"),
@@ -91,6 +90,31 @@ option_list <- list(
 ######################################################################
 ######################### UTILITY FUNCTIONS ##########################
 ######################################################################
+
+
+LocationOfThisScript = function() # Function LocationOfThisScript returns the location of this .R script (may be needed to source other files in same dir)
+{
+  this.file = NULL
+  # This file may be 'sourced'
+  for (i in -(1:sys.nframe())) {
+    if (identical(sys.function(i), base::source)) this.file = (normalizePath(sys.frame(i)$ofile))
+  }
+  
+  if (!is.null(this.file)) return(dirname(this.file))
+  
+  # But it may also be called from the command line
+  cmd.args = commandArgs(trailingOnly = FALSE)
+  cmd.args.trailing = commandArgs(trailingOnly = TRUE)
+  cmd.args = cmd.args[seq.int(from=1, length.out=length(cmd.args) - length(cmd.args.trailing))]
+  res = gsub("^(?:--file=(.*)|.*)$", "\\1", cmd.args)
+  
+  # If multiple --file arguments are given, R uses the last one
+  res = tail(res[res != ""], 1)
+  if (0 < length(res)) return(dirname(res))
+  
+  # Both are not the case. Maybe we are in an R GUI?
+  return(NULL)
+}
 
 # install and require packages using a function (allows for automation)
 ipak <- function(pkgs){
@@ -263,11 +287,240 @@ safeParallel = function(fun, args, simplify=F, MARGIN=NULL, n_cores=NULL, Gb_max
   
 }
 
+PercentAbove <- Seurat:::PercentAbove
+
+### Timshel functions
+### Updated to Seurat 3.0, Jonatan Thompson 20190315
+
+# from /projects/timshel/git/perslab-sc-library/seurat_functions/utils_seurat.R
+filter_genes_in_seurat_data.dataframe <- function(df, 
+                                                  seurat_obj, 
+                                                  assay="RNA",
+                                                  slot="data",
+                                                  colname_gene, 
+                                                  do.print=T) {
+  ### AIM         filter data frame to contain only genes in seurat data.
+  ### INPUT
+  # ....
+  ### OUTPUT
+  # df            a data frame, filtered to contain only genes in the seurat data. All columns are returned.
+  df <- as.data.frame(df) # make sure we start off with a data frame (and not a tibble).
+  genes_seurat_data <- rownames(seurat_obj) # vector of genes
+  bool.genes_in_seurat_data <- df[,colname_gene] %in% genes_seurat_data # boolean
+  if (do.print) {
+    genes_not_found <- df[!bool.genes_in_seurat_data, colname_gene]
+    print(sprintf("Filtered data frame. Number of genes not found in Seurat data: %s", length(genes_not_found)))
+    print(genes_not_found)
+  }
+  df.filtered <- df[bool.genes_in_seurat_data, ] # subset
+  return(df.filtered)
+}
+
+
+filter_genes_in_seurat_data.vector <- function(x, seurat_obj, do.print=T) {
+  # SEE filter_genes_in_seurat_data.dataframe.
+  # This function takes a vector as input.
+  genes_seurat_data <- rownames(seurat_obj) # vector of genes
+  bool.genes_in_seurat_data <- x %in% genes_seurat_data # boolean
+  if (do.print) {
+    genes_not_found <- x[!bool.genes_in_seurat_data]
+    print(sprintf("Filtered vector. Number of genes not found in Seurat data: %s", length(genes_not_found)))
+    print(genes_not_found)
+  }
+  x.filtered <- x[bool.genes_in_seurat_data] # subset
+  return(x.filtered)
+}
+
+
+DotPlot_timshel <- function(
+  object,
+  assay="RNA",
+  do.scale=F,
+  genes.plot,
+  cols.use = c("lightgrey", "blue"),
+  col.min = -2.5,
+  col.max = 2.5,
+  dot.min = 0,
+  dot.scale = 6,
+  group.by,
+  group.order=NULL,
+  plot.legend = FALSE,
+  do.return = FALSE,
+  x.lab.rot = T,
+  coord_flip = F,
+  df.marker.panel.to.plot=NULL
+  
+) {
+  #' Dot plot visualization
+  #'
+  #' Intuitive way of visualizing how gene expression changes across different
+  #' identity classes (clusters). The size of the dot encodes the percentage of
+  #' cells within a class, while the color encodes the AverageExpression level of
+  #' 'expressing' cells (blue is high).
+  #'
+  #' @param object Seurat object
+  #' @param assay Seurat object assay
+  #' @param do.scale display mean expression scaled around mean by sd? If F (default), plot log1p(mean.expr)
+  #' @param genes.plot Input vector of genes
+  #' @param cols.use colors to plot
+  #' @param col.min Minimum scaled average expression threshold (everything smaller
+  #'  will be set to this)
+  #' @param col.max Maximum scaled average expression threshold (everything larger
+  #' will be set to this)
+  #' @param dot.min The fraction of cells at which to draw the smallest dot
+  #' (default is 0.05). All cell groups with less than this expressing the given
+  #' gene will have no dot drawn.
+  #' @param dot.scale Scale the size of the points, similar to cex
+  #' @param group.by Factor to group the cells by
+  #' @param plot.legend plots the legends
+  #' @param x.lab.rot Rotate x-axis labels
+  #' @param do.return Return ggplot2 object
+  #'
+  #' @return default, no return, only graphical output. If do.return=TRUE, returns a ggplot2 object
+  #'
+  #' @importFrom tidyr gather
+  #' @importFrom dplyr %>% group_by summarize_each mutate ungroup
+  #'
+  #' @export
+  #'
+  #' @examples
+  #' cd_genes <- c("CD247", "CD3E", "CD9")
+  #' DotPlot(object = pbmc_small, genes.plot = cd_genes)
+
+  
+  # PT added: filter genes, to avoid errors with genes missing
+  if (!is.null(df.marker.panel.to.plot)) {
+    df.marker.panel.to.plot <- filter_genes_in_seurat_data.dataframe(df.marker.panel.to.plot, 
+                                                                     seurat_obj=object, 
+                                                                     colname_gene="gene_name", 
+                                                                     do.print=T)
+  }
+  genes.plot <- filter_genes_in_seurat_data.vector(genes.plot, seurat_obj=object, do.print=F)
+  
+  if (! missing(x = group.by)) {
+    Idents(object) <- object[[group.by]]
+  }
+  
+  # Use the data slot because some cells may have been filtered out which are still present in the counts slot
+  DefaultAssay(object) <- assay
+  data.to.plot <- FetchData(object = object, slot = "data", vars=genes.plot)
+  data.to.plot$cell <- rownames(x = data.to.plot)
+  data.to.plot$id <- Idents(object)
+  
+  data.to.plot %>% gather( 
+    key = genes.plot,
+    value = expression,
+    -c(cell, id) # so 'gather' the genes.plot columns into a single column called expression. Don't touch cell and id columns
+  ) -> data.to.plot # tidyr::gather takes multiple columns and collapses into key-value pairs, 
+  # duplicating all other columns as needed.
+  
+  data.to.plot %>%
+    group_by(id, genes.plot) %>% 
+    #Most data operations are done on groups defined by variables. 
+    # group_by() takes an existing tbl and converts it into a grouped tbl where operations are performed "by group". 
+    # the output of group_by is a tbl where the variables that were grouped - in this case cell barcodes, which were
+    # grouped by celltype ID - are missing 
+    # ungroup() removes grouping
+    # summarise replaces expression 
+    summarize(
+      avg.exp = mean(expm1(x = expression)), # convert back to raw counts in order to take mean
+      pct.exp = PercentAbove(x = expression, threshold = 0)
+    ) -> data.to.plot
+  
+  if (do.scale) {
+    data.to.plot %>%
+      ungroup() %>%
+      group_by(genes.plot) %>%
+      mutate(avg.exp.scale = scale(x = avg.exp)) %>%
+      mutate(avg.exp.scale = MinMax(
+        data = avg.exp.scale,
+        max = col.max,
+        min = col.min #This seems completely redundant..
+      )) ->  data.to.plot
+    
+    data.to.plot$avg.exp <- data.to.plot$avg.exp.scale
+  } else {
+    # convert mean expression to log
+    data.to.plot$avg.exp <- log1p(data.to.plot$avg.exp)
+  }
+  
+  data.to.plot$genes.plot <- factor(
+    x = data.to.plot$genes.plot,
+    levels = rev(x = sub(pattern = "-", replacement = ".", x = genes.plot))
+  )
+  data.to.plot$pct.exp[data.to.plot$pct.exp < dot.min] <- NA
+  
+  data.to.plot$id <- factor(data.to.plot$id, levels=rev(group.order)) #reorder(x=data.to.plot$id, X=match(data.to.plot$id, group.order), FU)
+  
+  ### PT
+  if (!is.null(df.marker.panel.to.plot)) {
+    df.marker.panel.to.plot <- df.marker.panel.to.plot %>% 
+      group_by(gene_name) %>% mutate(id = 0:(n()-1)) # OBS: column name "id" is also used in data.to.plot
+    # ^ Create a sequential number (counter) for rows within each group of a dataframe 
+    # ^ REF: https://stackoverflow.com/questions/11996135/create-a-sequential-number-counter-for-rows-within-each-group-of-a-dataframe
+    df.marker.panel.to.plot <- df.marker.panel.to.plot %>% rename(genes.plot=gene_name)
+    # order levels and clean gene names
+    df.marker.panel.to.plot$genes.plot <- factor(
+      x = sub(pattern = "-", replacement = ".", x = df.marker.panel.to.plot$genes.plot),
+      levels = rev(x = sub(pattern = "-", replacement = ".", x = genes.plot))
+    )
+  }
+  
+  ###
+  p_dot <- ggplot(data = data.to.plot, mapping = aes(x = genes.plot, y = id)) +
+    geom_point(mapping = aes(size = pct.exp, color = avg.exp)) +
+    scale_radius(range = c(0, dot.scale)) +
+    scale_color_gradientn(colours=cols.use) +
+    #scale_color_gradient(low = cols.use[1], high = cols.use[2]) +
+    theme(axis.title.x = element_blank(), axis.title.y = element_blank()) # <-- ORIGINAL
+  
+  if (! plot.legend) {
+    p_dot <- p_dot + theme(legend.position = "none")
+  }
+  if (x.lab.rot) {
+    p_dot <- p_dot + theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+  }
+  
+  if (coord_flip) p_dot <- p_dot + coord_flip()
+  
+  if (!is.null(df.marker.panel.to.plot)) {
+    ### Marker plot
+    p_markers <- ggplot(df.marker.panel.to.plot, aes(x=genes.plot)) + 
+      geom_bar(aes(fill=cell_type), show.legend=F, color="white") +
+      geom_text(aes(y=id, label=cell_type), angle=90, size=rel(3)) + 
+      theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+    # hjust=0 --> semi does not work
+    # hjust="outward" --> does not work
+    # hjust="inward" --> does not work
+    # Inward always aligns text towards the center, and outward aligns it away from the center
+    
+    # Using cowplots package to align plots and axis 
+    # REF: http://htmlpreview.github.io/?https://github.com/wilkelab/cowplot/blob/master/inst/doc/introduction.html
+    p_dot <- p_dot + theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+    p_markers <- p_markers + theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))
+    p_grid <- plot_grid(p_dot, p_markers, ncol=1, align = "v", axis="lr", rel_heights=c(3,3))
+    print(p_grid)
+    # suppressWarnings(print(p))
+  }
+  
+  print(p_dot)
+  
+  if (do.return) {
+    return(p_dot)
+    if (!is.null(df.marker.panel.to.plot)){
+      return(p_grid)
+      return(df.marker.panel.to.plot)
+    }
+  } else {
+    print("Returning nothing")
+  }
+}
+
 ######################################################################
 ########################### PACKAGES #################################
 ######################################################################
 
-ipak(c("optparse", "Matrix", "Matrix.utils", "Seurat", "ggplot2", "scales", "dplyr", "parallel", "reshape", "reshape2", "cowplot", "openxlsx", "readr", "RColorBrewer", "cowplot"))#, "pSI", "loomR", "doubletFinder")
+ipak(c("Matrix", "Matrix.utils", "Seurat", "ggplot2", "scales", "dplyr", "tidyr", "parallel", "reshape", "reshape2", "cowplot", "openxlsx", "readr", "RColorBrewer", "cowplot"))#, "pSI", "loomR", "doubletFinder")
 
 ######################################################################
 ########################### GET OPTIONS ##############################
@@ -363,6 +616,8 @@ dir_current <- paste0(LocationOfThisScript(), "/")
 
 flag_date = substr(gsub("-","",as.character(Sys.Date())),3,1000)
 
+pvalThreshold=0.05
+
 randomSeed <- 12345
 set.seed(randomSeed)
 
@@ -372,13 +627,15 @@ proportion.NN = 0.02
 
 # Seurat FindIntegrationAnchors and FindTransferAnchors 
 # https://satijalab.org/seurat/pancreas_integration_label_transfer.html
-k.anchor=5
-k.filter=200
-k.score=30
-max.features = 200
-k.weight = 50
-sd.weight = 1
 
+if (!is.null(path_transferLabelsRef) | !is.null(align_group_IDs) | !is.null(align_specify)) {
+  k.anchor=5
+  k.filter=200
+  k.score=30
+  max.features = 200
+  k.weight = 50
+  sd.weight = 1
+}
 ######################################################################
 ########################### VERIFY INPUT #############################
 ######################################################################
@@ -392,6 +649,7 @@ if (!flag_organism %in% c("mmusculus", "hsapiens")) stop("flag_organism must be 
 ############# LOAD 10x DATA AND CREATE SEURAT OBJECT #################
 ######################################################################
 
+message("Loading raw data")
 # Get dirs_sample and sample_IDs by searching dirs_project_10x
 if (!is.null(dirs_project_10x)) {
   
@@ -1087,7 +1345,6 @@ if ((!is.null(merge_group_IDs) | !is.null(merge_specify)) & length(list_seurat_o
   merge_ID = names(list_seurat_obj), SIMPLIFY=F)
 }
 
-
 ######################################################################
 ########################## NORMALISE #################################
 ######################################################################
@@ -1117,10 +1374,6 @@ list_seurat_obj <- safeParallel(fun=fun, args=args, outfile=outfile)
 ######################################################################
 ######################### DO INTEGRATION #############################
 ######################################################################
-
-#TODO: remove
-#save.image(paste0(dir_RObjects, prefix_data, "_", prefix_run, "_", 
-#                  flag_date, "_preIntegrateSessionImage.Rdata.gzip"), compress="gzip")
 
 if ((!is.null(align_group_IDs) | !is.null(align_specify)) & length(list_seurat_obj)>1) {
   
@@ -1227,7 +1480,6 @@ if ((!is.null(align_group_IDs) | !is.null(align_specify)) & length(list_seurat_o
 
 if (!is.null(align_group_IDs) | !is.null(align_specify)) DefaultAssay(object = seurat_obj) <- "integrated"
 
-
 ######################################################################
 ######################## COMPUTE CELL CYCLE SCORE ####################
 ######################################################################
@@ -1288,27 +1540,24 @@ fun = function(seurat_obj, name) {
   vec_logicVarsOK <- sapply(vars.to.regress, function(eachVar){
     if (!is.null(seurat_obj[[eachVar]])) !all(sapply(seurat_obj[[eachVar]], is.na)) else F
   })
-  
+  if (!all(vec_logicVarsOK)) warning(paste0("could not regress out ", vars.to.regress[!vec_logicVarsOK]))
   seurat_obj <- ScaleData(object = seurat_obj, 
                           vars.to.regress = vars.to.regress[vec_logicVarsOK],
                           block.size=15000,
                           min.cells.to.block = 10000,
                           verbose = T)
-  
-  if (!all(vec_logicVarsOK)) warning(paste0("could not regress out ", vars.to.regress[!vec_logicVarsOK]))
-  
 }
 args=list("seurat_obj" = list_seurat_obj, 
           "name" = names(list_seurat_obj))
 outfile = paste0(dir_log, prefix_data, "_", prefix_run, "_log_ScaleData.txt")
 #list_seurat_obj<-safeParallel(fun=fun, args=args,outfile=outfile)
-list_seurat_obj <- lapply(FUN=fun, "X"=args[[1]])
+list_seurat_obj <- mapply(FUN=fun, "seurat_obj"=args[[1]], "name"=args[[2]], SIMPLIFY=F)
 
 ######################################################################
 #################################### PCA #############################
 ######################################################################
 
-if (!is.null(align_group_IDs) | !is.null(align_specify) !is.null(merge_group_IDs) | !is.null(merge_specify)) {
+if (!is.null(align_group_IDs) | !is.null(align_specify) | !is.null(merge_group_IDs) | !is.null(merge_specify)) {
   message("Computing PCA")
   fun =  function(seurat_obj, obj_name) {
     tryCatch({
@@ -1396,7 +1645,7 @@ if (is.null(path_transferLabelsRef)) { # if not we'll compute later anyway
       RunTSNE(object = seurat_obj, 
               tsne.method="Rtsne",
               reduction = "pca",#if (is.null(align_group_IDs) & is.null(align_specify)) "pca" else "cca.aligned", 
-              dims= (1:n_comp)[PC_signif_idx], # no need to use all PCs for t-SNE
+              dims= (1:n_comp)[PC_signif_idx][1:min(25,sum(PC_signif_idx))],  # no need to use all PCs for t-SNE
               seed.use = randomSeed,
               #do.fast=T,
               perplexity=perplexity1,
@@ -1406,7 +1655,7 @@ if (is.null(path_transferLabelsRef)) { # if not we'll compute later anyway
       warning(paste0(obj_name, ": RunTSNE failed with error: ", err1, ", using perplexity ", perplexity1, ". Maybe due to cell count: ", dim(GetAssayData(object=seurat_obj))[2], ". Trying with perplexity ", perplexity2))
       tryCatch({RunTSNE(object = seurat_obj, 
                         reduction = "pca",#if (is.null(align_group_IDs) & is.null(align_specify)) "pca" else "cca.aligned", 
-                        dims = (1:n_comp)[PC_signif_idx], # no need to use all PCs for t-SNE
+                        dims =  (1:n_comp)[PC_signif_idx][1:min(25,sum(PC_signif_idx))], #, # no need to use all PCs for t-SNE
                         #do.fast=T,
                         seed.use = randomSeed,
                         perplexity = perplexity2,
@@ -1459,12 +1708,12 @@ if (!is.null(res_primary)) {
       
       # Save all the cluster assignments as meta data in the original seurat object
       for (i in seq(1:length(res_to_calc))) {
-        seurat_obj[[paste0("clust.res.", res_to_calc[i])]] <- Idents(object=list_seurat_obj_res[[i]])
+        seurat_obj[[paste0("RNA_snn_res.", res_to_calc[i])]] <- Idents(object=list_seurat_obj_res[[i]])
       }
       # No need to have this massive list in session!
       rm(list_seurat_obj_res)
       
-      Idents(object = seurat_obj) <- paste0("clust.res.", res_primary)
+      Idents(object = seurat_obj) <- paste0("RNA_snn_res.", res_primary)
       
       return(seurat_obj)
     }, seurat_obj = list_seurat_obj, PC_signif_idx=list_PC_signif_idx, SIMPLIFY=F)
@@ -1617,7 +1866,7 @@ if (!is.null(path_transferLabelsRef)) {
       
       seuratObjQuery <- RunTSNE(object = seuratObjQuery, 
                                 reduction = "pca", 
-                                dims = 1:min(30,ncol(Embeddings(object=seuratObjQuery, reduction="pca"))), # no need to use all PCs for t-SNE
+                                dims = (1:n_comp)[PC_signif_idx][1:min(25,sum(PC_signif_idx))],  # no need to use all PCs for t-SNE
                                 seed.use = randomSeed,
                                 check_duplicates=F,
                                 #do.fast=T,
@@ -1667,7 +1916,7 @@ if (!is.null(path_transferLabelsRef)) {
       
       seuratObjQuery <- RunTSNE(object = seuratObjQuery, 
                                 reduction = "pca", 
-                                dims = 1:min(30,ncol(Embeddings(object=seuratObjQuery, reduction="pca"))), # no need to use all PCs for t-SNE
+                                dims =(1:n_comp)[PC_signif_idx][1:min(25,sum(PC_signif_idx))],  # no need to use all PCs for t-SNE
                                 seed.use = randomSeed,
                                 check_duplicates=F,
                                 #do.fast=T,
@@ -1687,43 +1936,17 @@ if (!is.null(path_transferLabelsRef)) {
 
 message("Plotting t-SNE")
 invisible(mapply(function(seurat_obj, name) {
-  p1 <- DimPlot(object=seurat_obj,  
-                reduction="tsne",
-                dims=c(1,2),
-                #do.return = T, 
-                label=F,
-                pt.size = 1, 
-                group.by = "sample_ID", 
-                no.legend=F, 
-                plot.title=paste0(name, " by sample"))
-  ggsave(p1, filename =  paste0(dir_plots, prefix_data,"_",prefix_run, "_", name, "_tSNEPlot_sample.pdf"), w=10, h=10)
-  
+
   if (!is.null(res_primary)) {
     p2 <- DimPlot(object=seurat_obj, 
                   label = T, 
                   pt.size = 1, 
                   no.legend = F, 
-                  group.by = paste0("clust.res.",res_primary),
+                  group.by = paste0("RNA_snn_res.",res_primary),
                   plot.title = paste0(name, " by cluster")) # + xlab("t-SNE 1") + ylab("t-SNE 2"
     ggsave(p2, filename =  paste0(dir_plots, prefix_data, "_", prefix_run, "_", name, "_tSNEPlot_clust.pdf"), w=10, h=10)
   }
-  
-  if (!is.null(seurat_obj@meta.data$predicted.id)) {
-    p3 <- DimPlot(object=seurat_obj, 
-                  label = T, 
-                  pt.size = 1, 
-                  no.legend = F, 
-                  group.by = "predicted.id",
-                  plot.title = paste0(name, " by transferred label")) # + xlab("t-SNE 1") + ylab("t-SNE 2"
-    ggsave(p3, filename =  paste0(dir_plots, prefix_data, "_", prefix_run, "_", name, "_tSNEPlot_clust_transferlabel.pdf"), w=12, h=12)
-    
-    p3 <- FeaturePlot(object=seurat_obj, feature = "prediction.score.max")
-    ggsave(p3, filename =  paste0(dir_plots, prefix_data, "_", prefix_run, "_featurePlot_clust_transferlabel_predictionScore.pdf"), w=12, h=12)
-    
-  }
-  # p1 <- TSNEPlot(seurat_obj, do.return = T, pt.size = 1, group.by = "condition", no.legend=F, plot.title=paste0(name, " by condition"))
-  # ggsave(p1, filename =  paste0(dir_plots, prefix_data,"_",prefix_run, "_", name, "_tSNEPlot_condition.pdf"), w=10, h=10)
-  
+
 }, seurat_obj = list_seurat_obj,
 name = names(list_seurat_obj),
 SIMPLIFY=F
@@ -1734,8 +1957,6 @@ SIMPLIFY=F
 ######################################################################
 ####################### FIND CLUSTER MARKERS #########################
 ######################################################################
-
-pvalThreshold=0.05
 
 if (!is.null(res_primary)){
   
@@ -1784,17 +2005,9 @@ if (!is.null(res_primary)){
   names(list_markers) <- names(list_seurat_obj)
 }
 
-# list_seurat_obj <- lapply(list_seurat_obj, function(seurat_obj) {
-#   metadata <- ifelse(grepl("GF", seurat_obj@meta.data$sample_ID), yes="GF", no = "CR")
-#   metadata <- data.frame("condition" = metadata, row.names = rownames(seurat_obj@meta.data))
-#   AddMetaData(seurat_obj, metadata)
-# })
-
-
 ######################################################################
 ######################## FEATUREPLOTS ################################
 ######################################################################
-
 
 message("Making featureplots")
 if (!is.null(feats_to_plot)) {
@@ -1875,200 +2088,133 @@ if (run_SoupX) {
   }
 }
 
-########################## VIOLIN PLOTS ##############################
-
-message("making nCount_RNA and percent.mito and percent.ribo violin plots by sample")
-invisible(mapply(function(seurat_obj, name) {
-  VlnPlot(object = seurat_obj, 
-          features = "nCount_RNA", 
-          #do.sort = F, 
-          same.y.lims=T, 
-          #legend.position = "bottom", 
-          #single.legend = F, 
-          #do.return=T, 
-          group.by = "sample_ID")
-  ggsave(filename =  paste0(dir_plots, prefix_data,"_",prefix_run, "_", name, "_nCount_RNA_VlnPlot_sample.pdf"), w=10, h=10)
-  VlnPlot(object = seurat_obj, 
-          features = "percent.mito", 
-          #do.sort = F, 
-          same.y.lims=T, 
-          #legend.position = "bottom", 
-          #single.legend = F, 
-          #do.return=T, 
-          group.by = "sample_ID")
-  ggsave(filename =  paste0(dir_plots, prefix_data,"_",prefix_run, "_", name, "_percent.mito_VlnPlot_sample.pdf"), w=10, h=10)
-  VlnPlot(object = seurat_obj, 
-          features = "percent.ribo", 
-          #do.sort = F, 
-          same.y.lims=T, 
-          #legend.position = "bottom", 
-          #single.legend = F, 
-          #do.return=T, 
-          group.by = "sample_ID")
-  ggsave(filename =  paste0(dir_plots, prefix_data,"_",prefix_run, "_", name, "_percent.ribo_VlnPlot_sample.pdf"), w=10, h=10)
-  
-}, seurat_obj = list_seurat_obj,
-name = names(list_seurat_obj),
-SIMPLIFY=F
-))
-
-#### Facet plots of samples in each cluster and clusters in each sample ####
-
-message("plotting sample proportions in each cluster and cluster proportions for each sample")
-invisible(mapply(function(seurat_obj, name){
-  df = data.frame("sample_ID" =as.character(seurat_obj$sample_ID), "cluster"=as.character(Idents(seurat_obj)))
-  
-  ggplot(df, aes(sample_ID, cluster)) + geom_bar(stat = "identity") + facet_wrap(.~cluster) 
-  ggsave(filename =  paste0(dir_plots, prefix_data,"_",prefix_run, "_", name, "_samples_per_cluster.pdf"), w=24, h=15)
-  
-  ggplot(df, aes(cluster, sample_ID)) + geom_bar(stat = "identity") + facet_wrap(.~sample_ID) 
-  theme(strip.text.x = element_text(size=8, angle=75),
-        strip.text.y = element_text(size=12, face="bold"),
-        strip.background = element_rect(colour="red", fill="#CCCCFF"))
-  ggsave(filename =  paste0(dir_plots, prefix_data,"_",prefix_run, "_", name, "_cluster_per_sample.pdf"), w=24, h=15)
-}, seurat_obj = list_seurat_obj, name=names(list_seurat_obj),SIMPLIFY=F))
-
-
-if (!is.null(path_transferLabelsRef)) {
-  message("plotting sample proportions in each cluster and cluster proportions for each sample")
-  invisible(mapply(function(seurat_obj, name){
-    df = data.frame("sample_ID" =as.character(seurat_obj$sample_ID), "predicted.id"=as.character(seurat_obj@meta.data$predicted.id))
-    
-    ggplot(df, aes(sample_ID, predicted.id)) + geom_bar(stat = "identity") + facet_wrap(.~predicted.id) 
-    ggsave(filename =  paste0(dir_plots, prefix_data,"_",prefix_run, "_", name, "_samples_per_predicted.id.pdf"), w=24, h=15)
-    
-    ggplot(df, aes(predicted.id, sample_ID)) + geom_bar(stat = "identity") + facet_wrap(.~sample_ID) 
-    theme(strip.text.x = element_text(size=8, angle=75),
-          strip.text.y = element_text(size=12, face="bold"),
-          strip.background = element_rect(colour="red", fill="#CCCCFF"))
-    ggsave(filename =  paste0(dir_plots, prefix_data,"_",prefix_run, "_", name, "_predicted.id_per_sample.pdf"), w=24, h=15)
-  }, seurat_obj = list_seurat_obj, name=names(list_seurat_obj),SIMPLIFY=F))
-}
-
 ######################################################################
 ###################### MANUSCRIPT PLOTS B, C #########################
 ######################################################################
 
 invisible({
-  mapply(list_seurat_obj, function(seurat_obj, name) {
+  mapply(FUN=function(seurat_obj, name, df_markers) {
     
-  Idents(seurat_obj) <- seurat_obj$clust.res.0.8
-  
-  # rename clusters
-  
-  clustAnnot <- seurat_obj$clust.res.0.8 %>% as.character 
-  
-  list_vec_annotHash <- list("Sinus node myocytes"=c("4","12"), 
-                             "Fibroblasts I"=c("1"), 
-                             "Fibroblasts II" = c("10"),
-                             "Macrophages"=c("11"), 
-                             "Vascular endothelial cells" = c("3"), 
-                             "Endocardial cells"= c("9"), 
-                             "Epicardial cells"=c("0"), 
-                             "Epithelial cells"=c("7"), 
-                             "Adipocytes I"=c("6"), 
-                             "Adipocytes II"=c("5"), 
-                             "Adipocytes III"=c("2"),
-                             "Neurons"=c("8"))
-  
-  for (i in 1:length(list_vec_annotHash)) {
-    clustAnnot[clustAnnot%in%list_vec_annotHash[[i]]] <- names(list_vec_annotHash)[i]
-  }
-  
-  seurat_obj$clustAnnot <- clustAnnot
-  Idents(seurat_obj) <- clustAnnot 
-  
-  ############################## PLOT TSNE #############################
-  
-  p2 <- DimPlot(object=seurat_obj, 
-                label = T, 
-                pt.size = 1, 
-                no.legend = T, 
-                label.size=6,
-                repel=T,
-                group.by = paste0("clustAnnot"),
-                plot.title = paste0(name, " by cluster")) # + xlab("t-SNE 1") + ylab("t-SNE 2"
-  ggsave(p2, filename =  paste0(dir_plots, prefix_data, "_", prefix_run, "_tSNEPlot_clustAnnot.pdf"), w=14, h=10)
-  
-  ############################## DOT PLOTS #############################
-  
-  ############################## Figure B ##############################
-  
-  list_markers_20190314 <- list("Sinus node myocytes"=c("Myh6", "Ctnna3", "Ryr2", "Rbm20", "Dmd", "Ttn", "Tbx5"),
-                                "Fibroblasts I"=c("Col1a1", "Fbn1", "Ddr2", "Lama2", "Lamc1", "Pcsk6"), 
-                                "Fibroblasts II"=NA,
-                                "Macrophages"=c("Maf", "F13a1", "Cd163", "C3ar1", "P2ry6", "Mrc1", "Mgl2", "Adgre1", "Dab2"), 
-                                "Vascular endothelial cells" = c("Ptprb", "Icam1", "Vwf", "Ldb2", "Pecam1", "Cdh5"),
-                                "Endocardial cells" = c("Npr3", "Cdh13", "Eng", "Hmcn1", "Gmds"),
-                                "Epicardial cells"=c("Tbx18", "Wt1", "Tcf21", "Rbfox1", "Kcnd2", "Grip1", "Plxna4"),
-                                "Epithelial cells"=NA,
-                                "Adipocytes I"=c("Ucp1", "Cidea", "Prdm16", "Ppargc1b", "Pparg"),
-                                "Adipocytes II"=c("Lep", "Ghr", "Slc1a5", "Pde3b","Sorbs1"),
-                                "Adipocytes III"=c("Acsl1","Adipor2"),
-                                "Neurons"=c("Zfp804b", "Sh3gl2", "Meg3", "Ano1", "Sntg1", "Nlgn1"))
-  
-  df_markers <- openxlsx::read.xlsx(xlsxFile = paste0(dir_tables, prefix_data, "_", prefix_run, "_markers.xlsx"), sheet=1, startRow=1, colNames=T, rowNames=F)
-  head(df_markers)
-  
-  vec_idxNA <- sapply(list_markers_20190314, function(vec) vec %>% is.na %>% all)
-  list_markers_20190314[vec_idxNA] <- lapply(names(list_markers_20190314)[vec_idxNA], function(cell_type) {
-    df_markers %>% dplyr::filter(.data=., cluster==cell_type) %>% arrange(.data=., p_val)  %>% '[['("gene") %>%  '['(1:5) -> markers
-  })
-  list_markers_20190314
-  
-  vec_markers_20190314 <- unlist(list_markers_20190314, use.names = F)
-  
-  vec_markers_20190314 <- vec_markers_20190314[!vec_markers_20190314 %in% rownames(seurat_obj)]
-  
-  p<-DotPlot_timshel(
-    object=seurat_obj,
-    assay="RNA",
-    do.scale=T,
-    genes.plot=rev(vec_markers_20190314),#rev(df$gene_name),
-    cols.use = c("blue","white", "red"),#brewer.pal(n=11,"Spectral"),#c("blue","red"),
-    col.min = -2.5,
-    col.max = 2.5,
-    dot.min = 0,
-    dot.scale = 6,
-    group.by="clustAnnot",
-    group.order=names(list_markers_20190314),
-    plot.legend = T,
-    do.return = T,
-    x.lab.rot = T,
-    df.marker.panel.to.plot=NULL#df
-  )
-  ggsave(p, filename =  paste0(dir_plots, prefix_data,"_",prefix_run, "_dotplot_panelB.pdf"), w=18, h=7)
-  
-  
-  ############################## Figure B ##############################
-  c("HCN4", "SCN5A", "CACNA1C", "CACNA1H", "CACNA1G", "KCNH2", "KCNQ1", "KCNJ2", "KCNJ3", "KCNJ5", "KCNJ8", "KCNK3", "GJA1") %>% 
-    sapply(., function(gene){
-      gene <- paste0(substr(gene,1,1), tolower(substr(gene,2,nchar(gene))))
-    }) -> vec_genesPanelC
-  
-  vec_genesPanelC <- vec_genesPanelC[!vec_genesPanelC %in% rownames(seurat_obj)]
-  
-  p<-DotPlot_timshel(
-    object=seurat_obj,
-    assay="RNA",
-    do.scale=T,
-    genes.plot=rev(vec_genesPanelC),
-    cols.use = colorRampPalette(colors=c("blue","white","red"))(12),
-    col.min = -2.5,
-    col.max = 2.5,
-    dot.min = 0,
-    dot.scale = 6,
-    group.by="clustAnnot",
-    group.order=names(list_markers_20190314),
-    plot.legend = T,
-    do.return = T,
-    x.lab.rot = T,
-    coord_flip=F,
-    df.marker.panel.to.plot=NULL # reuse, as we don't plot it anyway
-  )
-  ggsave(p, filename =  paste0(dir_plots, prefix_data,"_",prefix_run, "_dotplot_panelC.pdf"), w=6, h=5)
-  
-  }, seurat_obj = list_seurat_obj, name = names(list_seurat_obj))
+    Idents(seurat_obj) <- seurat_obj[[paste0("RNA_snn_res.",res_primary)]]
+    
+    # rename clusters
+    
+    clustAnnot <- seurat_obj@meta.data[,paste0("RNA_snn_res.",res_primary)] %>% as.character
+    
+    list_vec_annotHash <- list("Sinus node myocytes"=c("9", "10","12"),
+                               "Fibroblasts I" = c("1"),
+                               "Fibroblasts II"=c("13"),
+                               "Macrophages"=c("5"),
+                               "Vascular endothelial cells"=c("2"),
+                               "Endocardial cells"= c("8"),
+                               "Epicardial cells"=c("0"), #?
+                               "Epithelial cells"=c("11","14"),
+                               "Adipocytes I"=c("3"),
+                               "Adipocytes II"=c("4"),
+                               "Adipocytes III"=c("7"),
+                               "Neurons"=c("6")) #
+
+    # Rename clusters from numbers to annotation
+    for (i in 1:length(list_vec_annotHash)) {
+      clustAnnot[clustAnnot%in%list_vec_annotHash[[i]]] <- names(list_vec_annotHash)[i]
+      df_markers$cluster[df_markers$cluster%in%list_vec_annotHash[[i]]] <- names(list_vec_annotHash)[i]
+    }
+    
+    seurat_obj$clustAnnot <- clustAnnot
+    Idents(seurat_obj) <- clustAnnot 
+    
+    ############################## PLOT TSNE #############################
+    
+    p2 <- DimPlot(object=seurat_obj, 
+                  label = T, 
+                  pt.size = 1, 
+                  no.legend = T, 
+                  label.size=6,
+                  repel=T,
+                  group.by = "clustAnnot",
+                  plot.title = paste0(name, " by cluster")) # + xlab("t-SNE 1") + ylab("t-SNE 2"
+    ggsave(p2, filename =  paste0(dir_plots, prefix_data, "_", prefix_run, "_tSNEPlot_clustAnnot.pdf"), w=14, h=10)
+    
+    ############################## DOT PLOTS #############################
+    
+    ############################## Figure B ##############################
+    
+    list_markers_20190314 <- list("Sinus node myocytes"=c("Myh6", "Ctnna3", "Ryr2", "Rbm20", "Dmd", "Ttn", "Tbx5"),
+                                  "Fibroblasts I"=c("Col1a1", "Fbn1", "Ddr2", "Lama2", "Lamc1", "Pcsk6"),
+                                  "Fibroblasts II"=NA,
+                                  "Macrophages"=c("Maf", "F13a1", "Cd163", "C3ar1", "P2ry6", "Mrc1", "Mgl2", "Adgre1", "Dab2"),
+                                  "Vascular endothelial cells" = c("Ptprb", "Icam1", "Vwf", "Ldb2", "Pecam1", "Cdh5"),
+                                  "Endocardial cells" = c("Npr3", "Cdh13", "Eng", "Hmcn1", "Gmds"),
+                                  "Epicardial cells"=c("Tbx18", "Wt1", "Tcf21", "Rbfox1", "Kcnd2", "Grip1", "Plxna4"),
+                                  "Epithelial cells"=NA,
+                                  "Adipocytes I"=c("Ucp1", "Cidea", "Prdm16", "Ppargc1b", "Pparg"),
+                                  "Adipocytes II"=c("Lep", "Ghr", "Slc1a5", "Pde3b","Sorbs1"),
+                                  "Adipocytes III"=c("Acsl1","Adipor2"),
+                                  "Neurons"=c("Zfp804b", "Sh3gl2", "Meg3", "Ano1", "Sntg1", "Nlgn1"))
+
+    # vec_idxNA <- sapply(list_markers_20190314, function(vec) vec %>% is.na %>% all)
+    # list_markers_20190314[vec_idxNA] <- lapply(names(list_markers_20190314)[vec_idxNA], function(cell_type) {
+    #   df_markers %>% dplyr::filter(.data=., cluster==cell_type) %>% arrange(.data=., p_val)  %>% '[['("gene") %>%  '['(1:5) -> markers
+    # })
+    # 
+    # vec_markers_20190314 <- unlist(list_markers_20190314, use.names = F)
+    # 
+    # vec_markers_20190314 <- vec_markers_20190314[vec_markers_20190314 %in% rownames(seurat_obj)]
+    # vec_markers_20190314 <- unique(vec_markers_20190314)
+    vec_markers_20190314 <- c("Myh6","Ctnna3","Ryr2","Rbm20","Dmd","Ttn","Tbx5","Col1a1","Fbn1","Ddr2","Lama2","Lamc1","Pcsk6",
+                              "Gpc6","Rbms3","Mecom","4930578G10Rik","Maf","F13a1","Cd163","C3ar1","P2ry6","Mrc1","Mgl2","Adgre1",
+                              "Dab2","Ptprb","Icam1","Vwf","Ldb2","Pecam1","Cdh5","Npr3","Cdh13","Eng","Hmcn1","Gmds","Tbx18","Wt1","Tcf21","Rbfox1",
+                              "Kcnd2","Grip1","Plxna4","Syne2","Ucp1","Cidea","Prdm16","Ppargc1b","Pparg","Lep","Ghr","Slc1a5","Pde3b","Sorbs1","Acsl1",
+                              "Adipor2","Zfp804b","Sh3gl2","Meg3","Ano1","Sntg1","Nlgn1")
+    p<-DotPlot_timshel(
+      object=seurat_obj,
+      assay="RNA",
+      do.scale=T,
+      genes.plot=rev(vec_markers_20190314),#rev(df$gene_name),
+      cols.use = c("blue","white", "red"),#brewer.pal(n=11,"Spectral"),#c("blue","red"),
+      col.min = -2.5,
+      col.max = 2.5,
+      dot.min = 0,
+      dot.scale = 6,
+      group.by="clustAnnot",
+      group.order=names(list_markers_20190314),
+      plot.legend = T,
+      do.return = T,
+      x.lab.rot = T,
+      df.marker.panel.to.plot=NULL#df
+    )
+    ggsave(p, filename =  paste0(dir_plots, prefix_data,"_",prefix_run, "_dotplot_panelB.pdf"), w=18, h=7)
+    
+    
+    ############################## Figure B ##############################
+    c("HCN4", "SCN5A", "CACNA1C", "CACNA1H", "CACNA1G", "KCNH2", "KCNQ1", "KCNJ2", "KCNJ3", "KCNJ5", "KCNJ8", "KCNK3", "GJA1") %>% 
+      sapply(., function(gene){
+        gene <- paste0(substr(gene,1,1), tolower(substr(gene,2,nchar(gene))))
+      }) -> vec_genesPanelC
+    
+    vec_genesPanelC <- vec_genesPanelC[vec_genesPanelC %in% rownames(seurat_obj)]
+    
+    p<-DotPlot_timshel(
+      object=seurat_obj,
+      assay="RNA",
+      do.scale=T,
+      genes.plot=rev(vec_genesPanelC),
+      cols.use = colorRampPalette(colors=c("blue","white","red"))(12),
+      col.min = -2.5,
+      col.max = 2.5,
+      dot.min = 0,
+      dot.scale = 6,
+      group.by="clustAnnot",
+      group.order=names(list_markers_20190314),
+      plot.legend = T,
+      do.return = T,
+      x.lab.rot = T,
+      coord_flip=F,
+      df.marker.panel.to.plot=NULL # reuse, as we don't plot it anyway
+    )
+    ggsave(p, filename =  paste0(dir_plots, prefix_data,"_",prefix_run, "_dotplot_panelC.pdf"), w=6, h=5)
+    
+  }, seurat_obj = list_seurat_obj, name = names(list_seurat_obj), df_markers=list_markers)
 })
 
 ######################################################################
@@ -2143,5 +2289,5 @@ print(x= "##########################")
 ############################### WRAP UP ##############################
 ######################################################################
 #save.image(file = paste0(dir_RObjects, prefix_data, "_", prefix_run,"_finalSessionImage.RData.gz"), compress="gzip")
-
+message("Script done!")
 
