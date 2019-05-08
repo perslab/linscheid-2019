@@ -1,6 +1,8 @@
 # linscheid-2019
 Scripts and data files related to Linscheid 2019 paper
 
+## Run the analysis
+
 1. Download the raw data fastq files from the [Gene Expression Omnibus](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE130710) 
 2. Run [10x Genomics Cell Ranger (v3.0)](https://support.10xgenomics.com/single-cell-gene-expression/software/pipelines/latest/what-is-cell-ranger) on the fastq files
 3. Edit `run_seurat_analysis.sh`
@@ -27,6 +29,8 @@ Scripts and data files related to Linscheid 2019 paper
 
     (see full R environment, including package versions, below)
 5. Run the analysis: `time bash run_seurat_analysis.sh &> run_seurat_analysis_log.txt`
+
+## Session Info
 
 > pander(sessionInfo())
 **R version 3.5.3 (2019-03-11)**
