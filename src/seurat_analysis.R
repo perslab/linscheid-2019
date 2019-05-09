@@ -1,6 +1,5 @@
-#' @title Seurat pipeline
+#' @title Seurat pipeline for Linscheid et al (2019)
 #' @author Jonatan Thompson, Pers lab, rkm916 at ku dot dk 
-#' @examples need to define $dir_10x_H4_S1, $dir_10x_H5_S2, $RAM_Gb_max. Then cd to linscheid-2019 and run Rscript ./src/seurat_analysis.R --dirs_project_10x 'c($dir_10x_H4_S1,$dir_10x_H5_S2)' --dir_out . --flag_datatype sc --flag_organism mmusculus --prefix_data 190301-lundby-coronarysinus  --prefix_run 1  --n_cells_loaded 9000 --use_filtered_feature_bc_matrix F --nCount_RNA_min 3000  --nCount_RNA_max 50000 --run_SoupX F --nFeature_RNA_min 0 --nFeature_RNA_max 25000 --percent.mito_max 0.08 --percent.ribo_max 0.01 --rm_sc_multiplets T --vars.to.regress "c('percent.mito','percent.ribo','nCount_RNA')" --merge_group_IDs "c('all')" --n_PC 75 --use_jackstraw F --res_primary 0.8 --feats_to_plot "c('percent.mito','percent.ribo','nCount_RNA','nFeature_RNA')" --RAM_Gb_max $RAM_Gb_max
 
 ######################################################################
 ########################### OptParse #################################
